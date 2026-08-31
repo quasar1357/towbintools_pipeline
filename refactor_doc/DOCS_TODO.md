@@ -181,9 +181,10 @@ filemap + ExperimentTime) runs inside `build_blocks_for_subdir` during "build bl
 - Imports are grouped stdlib / third-party / first-party (`towbintools_pipeline`),
   one blank line between groups. (`workers/straightening.py` keeps a `# noqa: E402`
   block because it sets an OpenBLAS env var before importing.)
-- Multiple names from the same module go in one `from x import a, b, c` statement,
-  wrapped in parentheses (one name per line, trailing comma) when it exceeds the
-  line length -- the isort/black default, not one-import-per-line.
+- Imports are one per line (`from x import a` / `from x import b`, never
+  `from x import a, b`), enforced by isort `force_single_line` with the black
+  profile (see `[tool.isort]` in `pyproject.toml`). Earlier the package used
+  grouped/parenthesised imports; the repo was switched to one-per-line.
 - Two blank lines between top-level functions/classes, one between methods
   (already holds package-wide; verified, no exceptions).
 - Module docstrings on the orchestration entry points (init_pipeline, block_linker,
