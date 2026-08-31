@@ -25,14 +25,35 @@ subcommand dispatcher — see "CLI / commands".)
 4. **Publish to PyPI** — currently installed from the repo/checkout only; publishing
    would make `pip install towbintools-pipeline` work directly. Easy later step.
 5. **Config validation, further** — optional warning-level "contents reasonable"
-   checks (e.g. `experiment_dir` contains a `raw/`), and running `validate_config`
-   in the login-node pre-flight (see the follow-up under "Config validation").
-6. **(lower) Warning-log volume** — some warnings can fire once per image and blow
-   up the `.out` file(s). Idea: keep a list of ignorable warnings in a repo file
-   (adjustable, but out of the user's config surface) and filter those when logging.
+   checks, e.g. *warn* (not fail) if `experiment_dir` has no `raw/`. NB input
+   *file* existence (models/checkpoints, custom scripts) is ALREADY hard-validated;
+   this is the softer, discussable "is the content plausible" set (raw non-empty,
+   maybe intermediate-ref sanity), so its scope needs pinning down before doing it —
+   one of the smallest of the "larger" items. (DONE: running `validate_config` in
+   the login-node pre-flight — `run_pipeline.sh` now validates before `sbatch`.)
+6. **(lower) Warning-log volume** — DONE: `warnings_filter.py` holds a repo-maintained
+   `_RULES` list, applied on package import, seeded with two benign UserWarnings
+   (torch `pin_memory` on CPU, huggingface symlinks). Note: library-native logging
+   (xgboost's C++ logger, plain `print()`s like the OME-TIFF "Could not parse XML")
+   is not reachable via `warnings.filterwarnings` — a separate knob if ever needed.
 7. **(lower) Output-filename suffix** — optional (bool, default off) suffix on output
    names. Deferred/parked: the data handling / read-in is changing soon, so not worth
    doing against the current scheme.
+
+## Robustness findings from a local end-to-end run — RESOLVED (#8/#9)
+Surfaced while validating the fork with a local pip install + smoke test; all
+fixed across the two merge PRs. Kept here as a record.
+1. no_timepoints + get_experiment_time crash — FIXED: skip ExperimentTime when the
+   filemap has no `Time` column.
+2. Poisoned filemap cache — FIXED: a filemap whose construction fails partway is
+   dropped so the next run rebuilds it instead of reusing the partial one.
+3. Raw column / hardcoded `"raw"` refs — FIXED: the literal `"raw"` denotes the raw
+   input in both ref resolution and output naming, regardless of `raw_dir_name`.
+4. cellpose imported at module scope — FIXED: lazy-imported, moved to an optional extra.
+5. pyproject under-declared deps — FIXED: the direct imports are declared explicitly
+   (opencv-contrib-python, pandas, scipy, torch, xgboost, tqdm).
+6. quality_control crash when all samples are eggs — FIXED: short-circuit the
+   empty-DMatrix case (version-independent).
 
 ## Deferred engineering cleanup
 - Cluster dep de-duplication was CONSIDERED and dropped: the cluster build is a

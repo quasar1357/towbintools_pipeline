@@ -112,6 +112,41 @@ Four tiers:
   job scripts and logs stay named after the BLOCK (what `sbatch_overrides` keys
   on and the progress log prints); a block can map to several workers.
 
+## Initialization / launch flow (dev-docs candidate — copy-paste ready)
+
+Where a cluster run's control passes from script to script. This is more a
+developer/architecture diagram than user docs; parking it here so it isn't lost.
+NOTE: re-check it whenever the launch chain changes (scripts, the run_params
+calls, or init_pipeline's early sequence) — it is hand-drawn, not generated.
+
+```
+USER (login node)
+  │  bash scripts/run_pipeline.sh -c my_config.yaml [-e DIR] [-t DIR]
+  ▼
+scripts/run_pipeline.sh          ← plain bash on the LOGIN node (no slurm job yet)
+  │  • cd repo root; mkdir ./sbatch_output (landing zone for the outer job's logs)
+  │  • scan args → CONFIG_FILE (the -c value, else the default config); capture -e
+  │  • resolve TOWBINTOOLS_PYTHON (env var → config's python_command → micromamba default)
+  │  • run_params --validate -c CONFIG [-e DIR]   → validate_config; exit non-zero here on failure
+  │  • run_params --sbatch-init -c CONFIG         → SBATCH_INIT_FLAGS (loads yaml + merge_slurm_config)
+  │  • sbatch $SBATCH_INIT_FLAGS scripts/_init_pipeline.sh "$@"    ←── submits the OUTER job
+  ▼
+scripts/_init_pipeline.sh        ← now a SLURM job on a COMPUTE node
+  │  • #SBATCH -J/-o/-e header → logs to ./sbatch_output/pipeline-<jobid>.out/.err
+  │  • ${TOWBINTOOLS_PYTHON} -m towbintools_pipeline.init_pipeline "$@"
+  ▼
+towbintools_pipeline/init_pipeline.py → main()   (the outer job, compute node)
+  │  • load yaml → apply -e override → merge_slurm_config
+  │  • validate_config(global_config)   (authoritative; also the only check on the
+  │       direct `python -m` / backend:local path, which skips run_pipeline.sh)
+  │  • set up run dir + backup → build blocks → submit the self-propagating block chain
+  ▼
+  (block workers + block_linker chain themselves through the rest of the run)
+```
+
+`validate_config` lives in `building_blocks.py`; `build_or_load_filemap` (the base
+filemap + ExperimentTime) runs inside `build_blocks_for_subdir` during "build blocks".
+
 ## Log output
 - The run prints a numbered plan of the blocks up front, then a
   `### Starting block 3/12 straightening ###` / `### Finished block ... ###` pair
@@ -166,8 +201,12 @@ Four tiers:
   e2e smoke test, and are grouped into labelled sections in the test file.
 - Known untested area: `get_experiment_time_from_filemap` (the T0 / incremental
   ExperimentTime logic). The e2e test runs with `get_experiment_time=False`, so
-  this path has no coverage; a faithful test needs a filemap with acquisition
-  dates and exercises the recursive recompute branch. Worth adding later.
+  this path has no coverage. NOT a quick test-add: it reads acquisition dates from
+  real files via `get_acquisition_date` inside a hardcoded
+  `parallel_config(backend="multiprocessing")`, so a monkeypatch won't reach the
+  worker subprocesses (esp. Windows/spawn). Needs either a small refactor
+  (extract the pure date->seconds-per-Point math from the file reading, then unit
+  test that) or real TIFF fixtures with acquisition dates. Worth doing later.
 - CI (`.github/workflows/tests.yml`): on every push and pull request, a GitHub
   Actions job does `pip install -e ".[dev]"` + `pytest` on Ubuntu / Python 3.12
   — the same pip path as the local install (`environment_local.yml`), so a red
@@ -300,14 +339,15 @@ Four tiers:
   - folder-ref existence for INTERMEDIATE refs — a mask/source ref pointing at a
     folder no earlier block produces is not caught (it cannot be: the folder is
     created during the run). Only user-supplied input paths are existence-checked.
-- Follow-up (nice-to-have): also run `validate_config` in the login-node pre-flight
-  (`run_pipeline.sh` already loads the config there for `sbatch_init`), so a bad
-  config fails BEFORE the sbatch submission with the error printed straight to the
-  terminal. Today validation runs inside the submitted job and aborts before the
-  run dir / log relocation, so the error lands in the outer job's slurm err file in
-  the repo-root landing zone (`sbatch_output/pipeline-<jobid>.err`) -- correct, but
-  easy to miss, and it still cost a job submission. Confirmed on the cluster:
-  the error is there and no folders are created.
+- Login-node pre-flight (DONE): `run_pipeline.sh` runs `validate_config` (via
+  `run_params --validate -c CONFIG [-e DIR]`) before `sbatch`, so a bad config
+  fails on the login node with the error on the terminal — no job is submitted.
+  `-e` is passed through so validation sees the same experiment dir the run will.
+  The in-job `validate_config` in `init_pipeline` stays as the authoritative check
+  and the only one on the direct `python -m` / `backend: local` path. (Previously
+  validation ran only inside the submitted job; its error landed in the outer job's
+  slurm err file under the repo-root landing zone — correct but easy to miss, and
+  it still cost a submission.)
 
 ## CLI / commands
 - The installed command is a subcommand dispatcher (`towbintools_pipeline/cli.py`):
